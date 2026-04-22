@@ -1,55 +1,4 @@
-import { useState, useRef, useEffect, useMemo } from "react";
-
-// ── Prompts ───────────────────────────────────────────────────────────────────
-const IDENTIFY_SYSTEM = `You are an expert One Piece TCG card identifier. The image may contain 1–6 cards.
-For each card extract: name, nameEN (English), setCode (e.g. OP12), cardNumber (e.g. OP12-070),
-rarity (C|UC|R|SR|L|SEC|SP), language (JP|EN), color (Red|Blue|Green|Purple|Black|Yellow|Multi).
-Respond ONLY with a valid JSON array. No markdown.`;
-
-const PRICE_SYSTEM = `You are a One Piece TCG price researcher. Follow these steps exactly:
-
-STEP 1 — OPTCG.GG (primary source — always try first):
-- Fetch: https://www.optcg.gg/products/cards/CARDNUMBER
-  Example: https://www.optcg.gg/products/cards/OP07-116
-- This page renders the TCGPlayer Market Price directly in HTML (look for "Market Price" field).
-- Also find the TCGPlayer product link on the page and extract the product URL.
-- This works for all standard card numbers (OP01-OP12, EB01-EB03, ST sets).
-
-STEP 2 — If OPTCG.GG fails or shows no price, fall back to TCGPlayer direct search:
-- Search: https://www.tcgplayer.com/search/one-piece-card-game/product?q=CARDNUMBER
-- Open the specific product page (URL format: tcgplayer.com/product/XXXXXX/one-piece-...)
-- Extract the MARKET PRICE (median of recent completed sales, NOT lowest listing price)
-- If not found by number, retry with: CARDNAME + set full name
-  Set codes → full names:
-  OP01=Romance Dawn, OP02=Paramount War, OP03=Pillars of Strength,
-  OP04=Kingdoms of Intrigue, OP05=Awakening of the New Era, OP06=Wings of the Captain,
-  OP07=500 Years in the Future, OP08=Two Legends, OP09=The Four Emperors,
-  OP10=Royal Blood, OP11=Egghead, OP12=Legacy of the Master,
-  EB01=Memorial Collection, EB02=Anime 25th Collection, EB03=Heroines Edition
-
-STEP 3 — Liga One Piece (BRL):
-- Fetch the card page directly (already known URL format)
-- If not available, search ligaonepiece.com.br for the card number or name
-- Return price in BRL and direct card URL
-
-Return ONLY valid JSON (no markdown):
-{"tcgplayer":{"price":1.23,"currency":"USD","url":"https://www.tcgplayer.com/product/XXXXXX/...","found":true},"ligaonepiece":{"price":4.56,"currency":"BRL","url":"https://...","found":true}}
-Use null+false if not found. Always return the most specific URL available (product page > search page).`;
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-const toBase64 = (f) => new Promise((res,rej) => { const r=new FileReader(); r.onload=()=>res(r.result.split(",")[1]); r.onerror=rej; r.readAsDataURL(f); });
-
-const callClaude = async (body, apiKey) => {
- const res = await fetch("https://api.anthropic.com/v1/messages", {
- method:"POST", headers:{"Content-Type":"application/json","x-api-key":apiKey,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
- body:JSON.stringify({model:"claude-opus-4-5",max_tokens:2000,...body}),
- });
- if(!res.ok) { const err=await res.json().catch(()=>({error:{message:res.status}})); throw new Error(err?.error?.message||`API ${res.status}`); }
- return res.json();
-};
-
-const extractArray = (t) => { const m=t.replace(/```json\n?|```/g,"").trim().match(/\[[\s\S]*\]/); if(!m) throw 0; return JSON.parse(m[0]); };
-const extractJSON = (t) => { const m=t.replace(/```json\n?|```/g,"").trim().match(/\{[\s\S]*\}/); if(!m) throw 0; return JSON.parse(m[0]); };
+import { useState, useEffect, useMemo } from "react";
 
 const USD_BRL = 5.75;
 const GIST_ID = "dd4e9c0f027be3c6c28626a6a71da288";
@@ -96,16 +45,12 @@ const SEED_CARDS = [
 // ── Main ──────────────────────────────────────────────────────────────────────
 export default function App() {
  const [cards, setCards] = useState([]);
- const [view, setView] = useState("collection");
- const [pendingBatch, setPendingBatch] = useState([]);
- const [imgPreview, setImgPreview] = useState(null);
  const [busy, setBusy] = useState(false);
  const [busyMsg, setBusyMsg] = useState("");
  const [gistId, setGistId] = useState(GIST_ID);
  const [githubToken, setGithubToken] = useState("");
  const [githubTokenInput, setGithubTokenInput] = useState("");
  const [toast, setToast] = useState(null);
- const [removedIds, setRemovedIds] = useState(new Set());
  const [showResetModal, setShowResetModal] = useState(false);
  // Filters & sort
  const [filterSet, setFilterSet] = useState("");
@@ -119,13 +64,9 @@ export default function App() {
  // Inline editing
  const [editingId, setEditingId] = useState(null);
  const [editValues, setEditValues] = useState({});
- // Admin / API key
- const [apiKey, setApiKey] = useState("");
- const [apiKeyInput, setApiKeyInput] = useState("");
+ // Admin
  const [showApiModal, setShowApiModal] = useState(false);
- const [showApiKeyText, setShowApiKeyText] = useState(false);
- const isAdmin = !!apiKey;
- const fileRef = useRef();
+ const isAdmin = !!githubToken;
 
  // ── Persistence ──────────────────────────────────────────────────────────────
  useEffect(() => {
@@ -134,7 +75,6 @@ export default function App() {
  let savedToken = "";
  try { const r=await window.storage.get("gistId"); if(r){savedGistId=r.value; setGistId(r.value);} } catch{}
  try { const r=await window.storage.get("githubToken"); if(r){savedToken=r.value; setGithubToken(r.value);setGithubTokenInput(r.value);} } catch{}
- try { const r=await window.storage.get("apiKey"); if(r){setApiKey(r.value);setApiKeyInput(r.value);} } catch{}
  // Gist é a fonte da verdade — carrega dele se disponível
  if(savedGistId) {
  try {
@@ -159,20 +99,16 @@ export default function App() {
  const showToast = (msg,type="success") => { setToast({msg,type}); setTimeout(()=>setToast(null),4000); };
 
  const loginAdmin = async () => {
- const key = apiKeyInput.trim();
- if(!key.startsWith("sk-ant-")) { showToast("Chave inválida. Deve começar com sk-ant-","error"); return; }
- setApiKey(key); await window.storage.set("apiKey",key).catch(()=>{});
  const ghToken = githubTokenInput.trim();
- if(ghToken) { setGithubToken(ghToken); await window.storage.set("githubToken",ghToken).catch(()=>{}); }
+ if(!ghToken.startsWith("ghp_") && !ghToken.startsWith("github_pat_")) {
+ showToast("Token inválido. Deve começar com ghp_ ou github_pat_","error"); return;
+ }
+ setGithubToken(ghToken); await window.storage.set("githubToken",ghToken).catch(()=>{});
  setShowApiModal(false); showToast("Modo admin ativado!");
  };
  const logoutAdmin = async () => {
- setApiKey(""); setApiKeyInput("");
  setGithubToken(""); setGithubTokenInput("");
- await Promise.all([
- window.storage.delete("apiKey").catch(()=>{}),
- window.storage.delete("githubToken").catch(()=>{}),
- ]);
+ await window.storage.delete("githubToken").catch(()=>{});
  showToast("Modo admin desativado.","info");
  };
 
@@ -210,46 +146,6 @@ export default function App() {
  const totalValue = cards.reduce((a,c)=>{ const avg=calcAvg(c.prices?.tcgplayer,c.prices?.ligaonepiece); return a+(avg?parseFloat(avg)*c.quantity:0); },0);
  const totalValueUSD = cards.reduce((a,c)=>{ const p=c.prices?.tcgplayer?.price; return a+(p?p*c.quantity:0); },0);
 
- // ── Identify ──────────────────────────────────────────────────────────────
- const handleFile = async (e) => {
- const file=e.target.files?.[0]; if(!file) return;
- setImgPreview(URL.createObjectURL(file));
- setBusy(true); setBusyMsg(" Identificando cartas..."); setView("identifying");
- try {
- const b64=await toBase64(file);
- const data=await callClaude({system:IDENTIFY_SYSTEM,messages:[{role:"user",content:[
- {type:"image",source:{type:"base64",media_type:file.type,data:b64}},
- {type:"text",text:"Identify ALL One Piece TCG cards visible. Return JSON array."},
- ]}]},apiKey);
- const text=data.content?.find(b=>b.type==="text")?.text||"[]";
- const batch=extractArray(text).map((c,i)=>({...c,quantity:1,condition:"NM",_tempId:Date.now()+i}));
- if(!batch.length) throw 0;
- setPendingBatch(batch); setRemovedIds(new Set()); setView("confirm");
- } catch(err) { showToast(`Erro: ${err.message}`,"error"); setView("collection"); }
- finally { setBusy(false); if(fileRef.current) fileRef.current.value=""; }
- };
-
- const updatePending = (tid,k,v) => setPendingBatch(p=>p.map(c=>c._tempId===tid?{...c,[k]:v}:c));
- const toggleRemove = (tid) => setRemovedIds(p=>{const n=new Set(p);n.has(tid)?n.delete(tid):n.add(tid);return n;});
-
- const confirmBatch = () => {
- const toAdd=pendingBatch.filter(c=>!removedIds.has(c._tempId));
- if(!toAdd.length){showToast("Nenhuma carta selecionada.","error");return;}
- let added=0,updated=0;
- setCards(prev=>{let next=[...prev];
- const now=new Date().toISOString();
- for(const card of toAdd){
- const {_tempId,...clean}=card;
- const idx=next.findIndex(c=>cardKey(c)===cardKey(clean));
- if(idx>=0){next[idx]={...next[idx],quantity:next[idx].quantity+clean.quantity};updated++;}
- else{next.push({...clean,id:Date.now()+Math.random(),addedAt:now});added++;}
- }
- return next;
- });
- showToast(` ${added} adicionada(s)${updated?`, ${updated} atualizada(s)`:""}`);
- setPendingBatch([]); setRemovedIds(new Set()); setImgPreview(null); setView("collection");
- };
-
  // ── Inline edit ───────────────────────────────────────────────────────────
  const startEdit = (card) => { setEditingId(card.id); setEditValues({quantity:card.quantity,condition:card.condition||"NM"}); };
  const saveEdit = (id) => {
@@ -257,61 +153,6 @@ export default function App() {
  setEditingId(null); showToast("Atualizado!");
  };
  const cancelEdit = () => setEditingId(null);
-
- // ── Prices ────────────────────────────────────────────────────────────────
- const fetchPrice = async (card) => {
- const data=await callClaude({system:PRICE_SYSTEM,tools:[{type:"web_search_20250305",name:"web_search"}],
- messages:[{role:"user",content:`Find prices for One Piece TCG: "${card.nameEN||card.name}" (${card.cardNumber}, ${card.rarity}, ${card.language}).`}]},apiKey);
- const text=data.content?.find(b=>b.type==="text")?.text; if(!text) return null;
- try{const r=extractJSON(text); if(r.tcgplayer&&!r.tcgplayer.url) r.tcgplayer.url=tcgUrl(card); if(r.ligaonepiece&&!r.ligaonepiece.url) r.ligaonepiece.url=ligaUrl(card); return r;} catch{return null;}
- };
-
-  const searchAllPrices = async () => {
-    // Search selected cards that have no price; if nothing selected, search all without price
-    const pool = selectedIds.size > 0
-      ? cards.filter(c => selectedIds.has(c.id) && !c.prices)
-      : cards.filter(c => !c.prices);
-    if(!pool.length){
-      showToast(
-        selectedIds.size > 0
-          ? "Todas as cartas selecionadas já têm preço."
-          : `Todas as cartas já têm preço. Use "Atualizar Preços" para re-buscar.`,
-        "info"
-      );
-      return;
-    }
-    setBusy(true); const upd=[...cards]; let done=0;
-    for(let i=0;i<upd.length;i++){
-      if(!pool.find(p=>p.id===upd[i].id)) continue;
-      done++;
-      setBusyMsg(`Buscando ${done}/${pool.length}: ${upd[i].nameEN||upd[i].name}`);
-      upd[i]={...upd[i],prices:await fetchPrice(upd[i])};
-      setCards([...upd]);
-    }
-    setBusy(false);
-    clearSelection();
-    showToast(`Busca concluída! ${done} carta(s) atualizada(s).`);
-  };
-
- const retryPrice = async (id) => {
- const card=cards.find(c=>c.id===id); if(!card) return;
- setBusy(true); setBusyMsg(` Re-buscando: ${card.cardNumber}...`);
- const prices=await fetchPrice(card);
- setCards(prev=>prev.map(c=>c.id===id?{...c,prices}:c));
- setBusy(false); showToast(prices?"Preços atualizados!":"Não encontrado.","info");
- };
-
-  const updateAllPrices = async () => {
-    // Re-fetch ALL cards, including those that already have prices
-    setBusy(true); const upd=[...cards]; let done=0;
-    for(let i=0;i<upd.length;i++){
-      done++;
-      setBusyMsg(`Atualizando ${done}/${upd.length}: ${upd[i].nameEN||upd[i].name}`);
-      upd[i]={...upd[i],prices:await fetchPrice(upd[i])};
-      setCards([...upd]);
-    }
-    setBusy(false); showToast(`Preços atualizados! (${upd.length} cartas)`);
-  };
 
  // ── GitHub Gist ───────────────────────────────────────────────────────────
  const loadFromGist = async () => {
@@ -374,7 +215,7 @@ export default function App() {
  const resetAll = async () => {
  setCards([]);
  setFilterSet(""); setFilterRarity(""); setFilterLang(""); setFilterCond("");
- setView("collection"); setShowResetModal(false);
+ setShowResetModal(false);
  await window.storage.set("cards","[]").catch(()=>{});
  // Propaga reset para o Gist (fonte da verdade)
  if(gistId && githubToken) {
@@ -387,68 +228,17 @@ export default function App() {
  }
  showToast("Tudo resetado!","info");
  };
- const loadSeed = async () => {
- setBusy(true); setBusyMsg(" Carregando coleção do Drive...");
- try {
- const data = await callClaude({
- system: "You are a Google Drive assistant. Fetch the file content and return it as plain JSON text.",
- mcp_servers:[{type:"url",url:"https://drivemcp.googleapis.com/mcp/v1",name:"google-drive"}],
- messages:[{role:"user",content:`Read the file with ID "${driveFileId}" from Google Drive and return its full JSON content as plain text, nothing else.`}],
- },apiKey);
- const text = (data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n");
- const match = text.match(/\{[\s\S]*\}/);
- if(!match) throw new Error("No JSON found");
- const parsed = JSON.parse(match[0]);
- const loaded = parsed.cards || parsed;
- setCards(loaded);
- await window.storage.set("cards", JSON.stringify(loaded));
- showToast(` ${loaded.length} cartas carregadas do Drive! (${parsed.updatedAt||""})`);
- } catch(e) {
- console.error(e);
- // Fallback to local seed
- setCards(SEED_CARDS);
- await window.storage.set("cards", JSON.stringify(SEED_CARDS));
- showToast(` Erro no Drive, usando seed local (${SEED_CARDS.length} cartas)`, "info");
- } finally { setBusy(false); }
- };
-
-  const saveToDrive = async () => {
-    setBusy(true); setBusyMsg("Salvando no Drive...");
-    try {
-      const payload = JSON.stringify({ cards, updatedAt: new Date().toISOString().slice(0,10) }, null, 2);
-      const b64 = btoa(unescape(encodeURIComponent(payload)));
-      const data = await callClaude({
-        system: "You are a Google Drive assistant. Create a JSON file and after creating it, return its file ID in this exact format on a line by itself: FILE_ID=XXXXXXX",
-        mcp_servers:[{type:"url",url:"https://drivemcp.googleapis.com/mcp/v1",name:"google-drive"}],
-        messages:[{role:"user",content:`Create a Google Drive file with title "onepiece-tcg-collection.json", mimeType "application/json", disableConversionToGoogleType true, and this base64 content: ${b64}
-Return the new file ID as: FILE_ID=THE_ID`}],
-      },apiKey);
-      const text = (data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n");
-      const idMatch = text.match(/FILE_ID=([A-Za-z0-9_-]{10,})/);
-      if(idMatch) {
-        const newId = idMatch[1];
-        setDriveFileId(newId); setDriveInput(newId);
-        await window.storage.set("driveFileId", newId);
-        showToast(`${cards.length} cartas salvas! ID atualizado automaticamente.`);
-      } else {
-        showToast(`${cards.length} cartas salvas! Novo arquivo criado no Drive.`);
-      }
-    } catch(e) { console.error(e); showToast("Erro ao salvar no Drive.", "error"); }
-    finally { setBusy(false); }
-  };
 
  const removeCard = (id) => setCards(p=>p.filter(c=>c.id!==id));
 
-  const toggleSelect = (id) => setSelectedIds(prev => {
-    const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n;
-  });
-  const toggleSelectAll = () => {
-    if(selectedIds.size === displayCards.length) setSelectedIds(new Set());
-    else setSelectedIds(new Set(displayCards.map(c=>c.id)));
-  };
-  const clearSelection = () => setSelectedIds(new Set());
-
- const activeCount=pendingBatch.filter(c=>!removedIds.has(c._tempId)).length;
+ const toggleSelect = (id) => setSelectedIds(prev => {
+ const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n;
+ });
+ const toggleSelectAll = () => {
+ if(selectedIds.size === displayCards.length) setSelectedIds(new Set());
+ else setSelectedIds(new Set(displayCards.map(c=>c.id)));
+ };
+ const clearSelection = () => setSelectedIds(new Set());
 
  // ── Render ────────────────────────────────────────────────────────────────
  return (
@@ -496,13 +286,8 @@ Return the new file ID as: FILE_ID=THE_ID`}],
  </div>
 
  {/* ── Action bar ── */}
- {view!=="confirm"&&<div style={{display:"flex",gap:8,marginBottom:20,flexWrap:"wrap",alignItems:"center"}}>
- {isAdmin&&<Btn onClick={()=>fileRef.current?.click()} disabled={busy} gradient="linear-gradient(135deg,#dc2626,#991b1b)" shadow="rgba(220,38,38,.35)">Adicionar Foto (até 6 cartas)</Btn>}
+ <div style={{display:"flex",gap:8,marginBottom:20,flexWrap:"wrap",alignItems:"center"}}>
  {cards.length>0&&isAdmin&&<>
- <Btn onClick={searchAllPrices} disabled={busy} gradient="linear-gradient(135deg,#059669,#064e3b)" shadow="rgba(5,150,105,.3)">
-              {selectedIds.size>0?`Buscar Selecionadas (${selectedIds.size})`:"Buscar Preços"}
-            </Btn>
- <Btn onClick={updateAllPrices} disabled={busy} gradient="linear-gradient(135deg,#0891b2,#0c4a6e)" shadow="rgba(8,145,178,.3)">Atualizar Preços</Btn>
  <Btn onClick={exportCSV} disabled={busy} gradient="linear-gradient(135deg,#7c3aed,#4c1d95)" shadow="rgba(124,58,237,.3)">CSV</Btn>
  </>}
  {isAdmin&&<>
@@ -522,12 +307,11 @@ Return the new file ID as: FILE_ID=THE_ID`}],
  onMouseLeave={e=>{e.currentTarget.style.color="#ef444460";e.currentTarget.style.background="transparent";}}>
  Resetar tudo</button>
  </>}
- {!isAdmin&&cards.length===0&&<div style={{fontSize:13,color:"#334155"}}>Entre como admin para adicionar cartas.</div>}
- <input ref={fileRef} type="file" accept="image/*" onChange={handleFile} style={{display:"none"}}/>
- </div>}
+ {!isAdmin&&cards.length===0&&<div style={{fontSize:13,color:"#334155"}}>Entre como admin para gerenciar cartas.</div>}
+ </div>
 
  {/* ── Filters & sort ── */}
- {cards.length>0&&view==="collection"&&<div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center"}}>
+ {cards.length>0&&<div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center"}}>
  <Select value={filterSet} onChange={setFilterSet} options={["",...allSets]} labels={["Todos os Sets",...allSets]} label="Set"/>
  <Select value={filterRarity} onChange={setFilterRarity} options={["","C","UC","R","SR","L","SEC","SP"]} labels={["Raridade","C","UC","R","SR","L","SEC","SP"]} label="Raridade"/>
  <Select value={filterLang} onChange={setFilterLang} options={["","EN","JP"]} labels={["Idioma","EN 🇺🇸","JP 🇯🇵"]} label="Idioma"/>
@@ -556,92 +340,15 @@ Return the new file ID as: FILE_ID=THE_ID`}],
  {/* ── Toast ── */}
  {toast&&<div style={{position:"fixed",bottom:24,right:24,zIndex:200,background:toast.type==="error"?"rgba(220,38,38,.95)":toast.type==="info"?"rgba(37,99,235,.95)":"rgba(5,150,105,.95)",borderRadius:10,padding:"12px 20px",boxShadow:"0 8px 32px rgba(0,0,0,.4)",fontSize:14,fontWeight:600,color:"white",animation:"slideIn .3s ease"}}>{toast.msg}</div>}
 
- {/* ── Identifying ── */}
- {view==="identifying"&&imgPreview&&<div style={{background:"rgba(255,255,255,.025)",border:"1px solid rgba(251,191,36,.15)",borderRadius:14,padding:24,marginBottom:24,display:"flex",alignItems:"center",gap:20}}>
- <img src={imgPreview} alt="card" style={{width:130,borderRadius:10,opacity:.75,objectFit:"cover",boxShadow:"0 8px 24px rgba(0,0,0,.5)"}}/>
- <div><div style={{color:"#fbbf24",fontWeight:700,fontSize:15,marginBottom:6}}>Analisando até 6 cartas...</div>
- <div style={{color:"#475569",fontSize:13}}>Identificando nome, número, raridade e idioma</div></div>
- </div>}
-
- {/* ── Batch confirm ── */}
- {view==="confirm"&&pendingBatch.length>0&&<div>
- <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap",gap:10}}>
- <div>
- <div style={{fontSize:15,fontWeight:800,color:"#fbbf24",letterSpacing:1}}> {pendingBatch.length} CARTA{pendingBatch.length>1?"S":""} IDENTIFICADA{pendingBatch.length>1?"S":""}</div>
- <div style={{fontSize:12,color:"#475569",marginTop:3}}>Revise, edite e confirme antes de adicionar</div>
- </div>
- <div style={{display:"flex",gap:8}}>
- <button onClick={()=>{setPendingBatch([]);setRemovedIds(new Set());setImgPreview(null);setView("collection");}}
- style={{background:"rgba(255,255,255,.04)",border:"1px solid rgba(255,255,255,.1)",borderRadius:9,padding:"9px 18px",color:"#64748b",cursor:"pointer",fontSize:13,fontWeight:600}}>Cancelar</button>
- <Btn onClick={confirmBatch} gradient="linear-gradient(135deg,#dc2626,#991b1b)" shadow="rgba(220,38,38,.3)">Confirmar {activeCount} carta{activeCount!==1?"s":""}</Btn>
- </div>
- </div>
- <div style={{display:"grid",gridTemplateColumns:"180px 1fr",gap:20,alignItems:"start"}}>
- {imgPreview&&<div style={{position:"sticky",top:80}}>
- <img src={imgPreview} alt="cards" style={{width:"100%",borderRadius:12,objectFit:"cover",boxShadow:"0 12px 40px rgba(0,0,0,.6)"}}/>
- <div style={{textAlign:"center",marginTop:8,fontSize:11,color:"#334155"}}>{pendingBatch.length} detectada{pendingBatch.length>1?"s":""}</div>
- </div>}
- <div style={{display:"flex",flexDirection:"column",gap:12}}>
- {pendingBatch.map((card,idx)=>{
- const isRm=removedIds.has(card._tempId), isDup=cards.some(c=>cardKey(c)===cardKey(card));
- const rm=RARITY[card.rarity]||RARITY["C"];
- return <div key={card._tempId} style={{background:isRm?"rgba(239,68,68,.04)":"rgba(255,255,255,.03)",border:`1px solid ${isRm?"rgba(239,68,68,.2)":isDup?"rgba(251,191,36,.25)":"rgba(255,255,255,.08)"}`,borderRadius:12,padding:16,opacity:isRm?.4:1,transition:"all .2s"}}>
- <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
- <div style={{display:"flex",alignItems:"center",gap:8}}>
- <span style={{background:"rgba(255,255,255,.06)",borderRadius:5,padding:"2px 9px",fontSize:11,color:"#475569",fontWeight:700}}>#{idx+1}</span>
- {isDup&&!isRm&&<span style={{background:"rgba(251,191,36,.1)",border:"1px solid rgba(251,191,36,.3)",color:"#fbbf24",borderRadius:5,padding:"2px 9px",fontSize:10,fontWeight:700}}> Já na coleção</span>}
- {isRm&&<span style={{color:"#ef4444",fontSize:11,fontWeight:700}}>REMOVIDA</span>}
- </div>
- <button onClick={()=>toggleRemove(card._tempId)} style={{background:isRm?"rgba(5,150,105,.15)":"rgba(239,68,68,.1)",border:`1px solid ${isRm?"rgba(5,150,105,.3)":"rgba(239,68,68,.25)"}`,color:isRm?"#34d399":"#ef4444",borderRadius:7,padding:"4px 12px",cursor:"pointer",fontSize:12,fontWeight:700}}>
- {isRm?"↩ Restaurar":" Remover"}</button>
- </div>
- {!isRm&&<div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10}}>
- {[["Nome","name"],["Nome EN","nameEN"],["Set","setCode"],["Número","cardNumber"]].map(([l,k])=>
- <Field key={k} label={l} value={card[k]||""} onChange={v=>updatePending(card._tempId,k,v)}/>)}
- <div>
- <div style={{fontSize:10,color:"#475569",marginBottom:4,textTransform:"uppercase",letterSpacing:1,fontWeight:600}}>Raridade</div>
- <select value={card.rarity||""} onChange={e=>updatePending(card._tempId,"rarity",e.target.value)}
- style={{background:"rgba(255,255,255,.04)",border:"1px solid rgba(255,255,255,.08)",borderRadius:7,padding:"7px 9px",color:rm.c,width:"100%",fontSize:13,outline:"none",fontWeight:800}}>
- {Object.keys(RARITY).map(r=><option key={r} value={r} style={{background:"#1e293b",color:RARITY[r].c}}>{r}</option>)}
- </select>
- </div>
- <div>
- <div style={{fontSize:10,color:"#475569",marginBottom:4,textTransform:"uppercase",letterSpacing:1,fontWeight:600}}>Idioma</div>
- <select value={card.language||""} onChange={e=>updatePending(card._tempId,"language",e.target.value)}
- style={{background:"rgba(255,255,255,.04)",border:"1px solid rgba(255,255,255,.08)",borderRadius:7,padding:"7px 9px",color:"#e2e8f0",width:"100%",fontSize:13,outline:"none"}}>
- <option value="EN" style={{background:"#1e293b"}}>🇺🇸 EN</option>
- <option value="JP" style={{background:"#1e293b"}}>🇯🇵 JP</option>
- </select>
- </div>
- <div>
- <div style={{fontSize:10,color:"#475569",marginBottom:4,textTransform:"uppercase",letterSpacing:1,fontWeight:600}}>Condição</div>
- <select value={card.condition||"NM"} onChange={e=>updatePending(card._tempId,"condition",e.target.value)}
- style={{background:"rgba(255,255,255,.04)",border:"1px solid rgba(255,255,255,.08)",borderRadius:7,padding:"7px 9px",color:"#e2e8f0",width:"100%",fontSize:13,outline:"none"}}>
- {CONDITIONS.map(c=><option key={c} value={c} style={{background:"#1e293b"}}>{c}</option>)}
- </select>
- </div>
- <Field label="Quantidade" value={card.quantity} type="number" onChange={v=>updatePending(card._tempId,"quantity",parseInt(v)||1)}/>
- </div>}
- </div>;
- })}
- </div>
- </div>
- <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:20,paddingTop:16,borderTop:"1px solid rgba(255,255,255,.06)"}}>
- <button onClick={()=>{setPendingBatch([]);setRemovedIds(new Set());setImgPreview(null);setView("collection");}}
- style={{background:"rgba(255,255,255,.04)",border:"1px solid rgba(255,255,255,.1)",borderRadius:9,padding:"10px 20px",color:"#64748b",cursor:"pointer",fontSize:13,fontWeight:600}}>Cancelar</button>
- <Btn onClick={confirmBatch} gradient="linear-gradient(135deg,#dc2626,#991b1b)" shadow="rgba(220,38,38,.3)">Confirmar {activeCount} carta{activeCount!==1?"s":""}</Btn>
- </div>
- </div>}
-
  {/* ── Empty ── */}
- {cards.length===0&&view==="collection"&&<div style={{textAlign:"center",padding:"80px 20px"}}>
- <div style={{fontSize:64,marginBottom:16}}>‍</div>
+ {cards.length===0&&<div style={{textAlign:"center",padding:"80px 20px"}}>
+ <div style={{fontSize:64,marginBottom:16}}>🃏</div>
  <div style={{fontSize:20,fontWeight:800,color:"#1e293b",marginBottom:8,letterSpacing:1}}>COLEÇÃO VAZIA</div>
- <div style={{fontSize:14,color:"#334155"}}>Tire uma foto com <strong style={{color:"#ef4444"}}>até 6 cartas</strong> lado a lado para começar</div>
+ <div style={{fontSize:14,color:"#334155"}}>Entre como admin e salve cartas via GitHub Gist</div>
  </div>}
 
  {/* ── Grid view ── */}
- {cards.length>0&&view==="collection"&&gridView&&<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:16}}>
+ {cards.length>0&&gridView&&<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:16}}>
  {displayCards.map(card=>{
  const tcp=card.prices?.tcgplayer, liga=card.prices?.ligaonepiece, avg=calcAvg(tcp,liga);
  const rm=RARITY[card.rarity]||RARITY["C"];
@@ -659,8 +366,7 @@ Return the new file ID as: FILE_ID=THE_ID`}],
  <div style={{position:"absolute",top:8,right:8}}>
  <span style={{background:`${rm.c}cc`,border:`1px solid ${rm.c}`,color:"white",borderRadius:5,padding:"2px 7px",fontSize:10,fontWeight:800}}>{card.rarity}</span>
  </div>
- {isAdmin&&<div style={{position:"absolute",top:8,left:8,display:"flex",flexDirection:"column",gap:4}}>
- <button onClick={()=>retryPrice(card.id)} title="Atualizar preço" style={{background:"rgba(0,0,0,.6)",border:"1px solid rgba(96,165,250,.4)",color:"#60a5fa",borderRadius:5,padding:"3px 6px",cursor:"pointer",fontSize:10}}>💲</button>
+ {isAdmin&&<div style={{position:"absolute",top:8,left:8}}>
  <button onClick={()=>removeCard(card.id)} title="Remover" style={{background:"rgba(0,0,0,.6)",border:"1px solid rgba(239,68,68,.4)",color:"#ef4444",borderRadius:5,padding:"3px 6px",cursor:"pointer",fontSize:10}}>✕</button>
  </div>}
  </div>
@@ -677,7 +383,7 @@ Return the new file ID as: FILE_ID=THE_ID`}],
  </div>}
 
  {/* ── Collection table ── */}
- {cards.length>0&&view==="collection"&&!gridView&&<div style={{background:"rgba(255,255,255,.018)",border:"1px solid rgba(255,255,255,.06)",borderRadius:14,overflow:"auto"}}>
+ {cards.length>0&&!gridView&&<div style={{background:"rgba(255,255,255,.018)",border:"1px solid rgba(255,255,255,.06)",borderRadius:14,overflow:"auto"}}>
  <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
  <thead>
  <tr style={{background:"rgba(251,191,36,.04)",borderBottom:"1px solid rgba(251,191,36,.12)"}}>
@@ -767,16 +473,16 @@ Return the new file ID as: FILE_ID=THE_ID`}],
  <div style={{display:"flex",gap:4}}>
  {isEditing
  ? <>
- <button onClick={()=>saveEdit(card.id)} style={{background:"rgba(5,150,105,.15)",border:"1px solid rgba(5,150,105,.3)",color:"#34d399",borderRadius:6,padding:"4px 8px",cursor:"pointer",fontSize:12}}></button>
- <button onClick={cancelEdit} style={{background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#64748b",borderRadius:6,padding:"4px 8px",cursor:"pointer",fontSize:12}}></button>
+ <button onClick={()=>saveEdit(card.id)} style={{background:"rgba(5,150,105,.15)",border:"1px solid rgba(5,150,105,.3)",color:"#34d399",borderRadius:6,padding:"4px 8px",cursor:"pointer",fontSize:12}}>✓</button>
+ <button onClick={cancelEdit} style={{background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",color:"#64748b",borderRadius:6,padding:"4px 8px",cursor:"pointer",fontSize:12}}>✕</button>
  </>
  : <>
  <button onClick={()=>startEdit(card)} title="Editar" style={{background:"transparent",border:"1px solid rgba(251,191,36,.2)",color:"#fbbf2460",borderRadius:6,padding:"4px 7px",cursor:"pointer",fontSize:11,transition:"all .2s"}}
- onMouseEnter={e=>{e.target.style.color="#fbbf24";e.target.style.background="rgba(251,191,36,.08)";}} onMouseLeave={e=>{e.target.style.color="#fbbf2460";e.target.style.background="transparent";}}></button>
- <button onClick={()=>retryPrice(card.id)} disabled={busy} title="Atualizar preço" style={{background:"transparent",border:"1px solid rgba(96,165,250,.2)",color:"#60a5fa60",borderRadius:6,padding:"4px 7px",cursor:"pointer",fontSize:11,transition:"all .2s"}}
- onMouseEnter={e=>{e.target.style.color="#60a5fa";e.target.style.background="rgba(96,165,250,.08)";}} onMouseLeave={e=>{e.target.style.color="#60a5fa60";e.target.style.background="transparent";}}></button>
+ onMouseEnter={e=>{e.target.style.color="#fbbf24";e.target.style.background="rgba(251,191,36,.08)";}} onMouseLeave={e=>{e.target.style.color="#fbbf2460";e.target.style.background="transparent";}}
+ >✎</button>
  <button onClick={()=>removeCard(card.id)} title="Remover" style={{background:"transparent",border:"1px solid rgba(239,68,68,.2)",color:"#ef444460",borderRadius:6,padding:"4px 7px",cursor:"pointer",fontSize:11,transition:"all .2s"}}
- onMouseEnter={e=>{e.target.style.color="#ef4444";e.target.style.background="rgba(239,68,68,.1)";}} onMouseLeave={e=>{e.target.style.color="#ef444460";e.target.style.background="transparent";}}></button>
+ onMouseEnter={e=>{e.target.style.color="#ef4444";e.target.style.background="rgba(239,68,68,.1)";}} onMouseLeave={e=>{e.target.style.color="#ef444460";e.target.style.background="transparent";}}
+ >✕</button>
  </>}
  </div>
  </td>}
@@ -786,27 +492,13 @@ Return the new file ID as: FILE_ID=THE_ID`}],
  </table>
  </div>}
 
- {/* ── API Key modal ── */}
+ {/* ── Admin modal ── */}
  {showApiModal&&<div onClick={()=>setShowApiModal(false)}
  style={{position:"fixed",inset:0,zIndex:500,background:"rgba(0,0,0,.85)",display:"flex",alignItems:"center",justifyContent:"center",backdropFilter:"blur(4px)"}}>
  <div onClick={e=>e.stopPropagation()} style={{background:"#0f172a",border:"1px solid rgba(251,191,36,.3)",borderRadius:16,padding:28,maxWidth:420,width:"90%",boxShadow:"0 24px 60px rgba(0,0,0,.7)"}}>
- <div style={{fontSize:28,textAlign:"center",marginBottom:8}}></div>
+ <div style={{fontSize:28,textAlign:"center",marginBottom:8}}>🔑</div>
  <div style={{fontSize:16,fontWeight:800,color:"#fbbf24",textAlign:"center",marginBottom:4}}>Modo Admin</div>
- <div style={{fontSize:12,color:"#475569",textAlign:"center",marginBottom:20}}>Cole suas chaves para desbloquear edição</div>
- <div style={{fontSize:10,color:"#475569",marginBottom:6,textTransform:"uppercase",letterSpacing:1,fontWeight:600}}>Anthropic API Key</div>
- <div style={{position:"relative",marginBottom:12}}>
- <input
- type={showApiKeyText?"text":"password"}
- value={apiKeyInput}
- onChange={e=>setApiKeyInput(e.target.value)}
- onKeyDown={e=>e.key==="Enter"&&loginAdmin()}
- placeholder="sk-ant-api03-..."
- autoFocus
- style={{width:"100%",background:"rgba(255,255,255,.05)",border:"1px solid rgba(251,191,36,.3)",borderRadius:9,padding:"10px 44px 10px 14px",color:"#e2e8f0",fontSize:13,outline:"none",boxSizing:"border-box",fontFamily:"monospace"}}/>
- <button onClick={()=>setShowApiKeyText(v=>!v)}
- style={{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",background:"transparent",border:"none",color:"#475569",cursor:"pointer",fontSize:16,padding:4}}>
- {showApiKeyText?"🙈":"👁"}</button>
- </div>
+ <div style={{fontSize:12,color:"#475569",textAlign:"center",marginBottom:20}}>Cole seu GitHub Token para desbloquear edição</div>
  <div style={{fontSize:10,color:"#475569",marginBottom:6,textTransform:"uppercase",letterSpacing:1,fontWeight:600}}>GitHub Token <span style={{color:"#334155",textTransform:"none",letterSpacing:0}}>(escopo: gist)</span></div>
  <input
  type="password"
@@ -814,9 +506,10 @@ Return the new file ID as: FILE_ID=THE_ID`}],
  onChange={e=>setGithubTokenInput(e.target.value)}
  onKeyDown={e=>e.key==="Enter"&&loginAdmin()}
  placeholder="ghp_..."
+ autoFocus
  style={{width:"100%",background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",borderRadius:9,padding:"10px 14px",color:"#e2e8f0",fontSize:13,outline:"none",boxSizing:"border-box",fontFamily:"monospace",marginBottom:16}}/>
  <div style={{fontSize:11,color:"#334155",marginBottom:20,lineHeight:1.6}}>
- Tudo salvo apenas no seu browser (localStorage). Visitantes sem as chaves só visualizam a coleção.
+ Token salvo apenas no seu browser (localStorage). Visitantes sem o token só visualizam a coleção.
  </div>
  <div style={{display:"flex",gap:10}}>
  <button onClick={()=>setShowApiModal(false)} style={{flex:1,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.12)",borderRadius:9,padding:"11px",color:"#64748b",cursor:"pointer",fontSize:14,fontWeight:600}}>Cancelar</button>
@@ -829,7 +522,7 @@ Return the new file ID as: FILE_ID=THE_ID`}],
  {showResetModal&&<div onClick={()=>setShowResetModal(false)}
  style={{position:"fixed",inset:0,zIndex:500,background:"rgba(0,0,0,.8)",display:"flex",alignItems:"center",justifyContent:"center",backdropFilter:"blur(4px)"}}>
  <div onClick={e=>e.stopPropagation()} style={{background:"#0f172a",border:"1px solid rgba(239,68,68,.4)",borderRadius:16,padding:28,maxWidth:380,width:"90%",boxShadow:"0 24px 60px rgba(0,0,0,.7)"}}>
- <div style={{fontSize:32,textAlign:"center",marginBottom:12}}></div>
+ <div style={{fontSize:32,textAlign:"center",marginBottom:12}}>⚠️</div>
  <div style={{fontSize:16,fontWeight:800,color:"#ef4444",textAlign:"center",marginBottom:8}}>Resetar tudo?</div>
  <div style={{fontSize:13,color:"#94a3b8",textAlign:"center",lineHeight:1.7,marginBottom:24}}>
  Apaga todas as cartas e desvincula o Gist.<br/>
@@ -853,15 +546,6 @@ function Btn({children,onClick,disabled,gradient,shadow}){
  style={{background:disabled?"rgba(255,255,255,.05)":gradient,border:"none",borderRadius:9,padding:"10px 20px",color:disabled?"#334155":"white",fontWeight:700,cursor:disabled?"not-allowed":"pointer",fontSize:13,boxShadow:disabled?"none":`0 4px 20px ${shadow}`,transition:"all .2s",whiteSpace:"nowrap"}}
  onMouseEnter={e=>{if(!disabled)e.currentTarget.style.transform="translateY(-1px)";}}
  onMouseLeave={e=>{e.currentTarget.style.transform="";}}>{children}</button>;
-}
-
-function Field({label,value,onChange,type="text"}){
- return <div>
- <div style={{fontSize:10,color:"#475569",marginBottom:4,textTransform:"uppercase",letterSpacing:1.2,fontWeight:600}}>{label}</div>
- <input type={type} value={value} onChange={e=>onChange(e.target.value)}
- style={{background:"rgba(255,255,255,.04)",border:"1px solid rgba(255,255,255,.08)",borderRadius:7,padding:"7px 9px",color:"#e2e8f0",width:"100%",fontSize:13,outline:"none",boxSizing:"border-box",transition:"border .2s"}}
- onFocus={e=>e.target.style.borderColor="rgba(251,191,36,.4)"} onBlur={e=>e.target.style.borderColor="rgba(255,255,255,.08)"}/>
- </div>;
 }
 
 function Select({value,onChange,options,labels,label}){
