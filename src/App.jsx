@@ -39,9 +39,9 @@ Use null+false if not found. Always return the most specific URL available (prod
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const toBase64 = (f) => new Promise((res,rej) => { const r=new FileReader(); r.onload=()=>res(r.result.split(",")[1]); r.onerror=rej; r.readAsDataURL(f); });
 
-const callClaude = async (body) => {
+const callClaude = async (body, apiKey) => {
  const res = await fetch("https://api.anthropic.com/v1/messages", {
- method:"POST", headers:{"Content-Type":"application/json"},
+ method:"POST", headers:{"Content-Type":"application/json","x-api-key":apiKey,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
  body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:2000,...body}),
  });
  if(!res.ok) throw new Error(`API ${res.status}`);
@@ -116,6 +116,12 @@ export default function App() {
  // Inline editing
  const [editingId, setEditingId] = useState(null);
  const [editValues, setEditValues] = useState({});
+ // Admin / API key
+ const [apiKey, setApiKey] = useState("");
+ const [apiKeyInput, setApiKeyInput] = useState("");
+ const [showApiModal, setShowApiModal] = useState(false);
+ const [showApiKeyText, setShowApiKeyText] = useState(false);
+ const isAdmin = !!apiKey;
  const fileRef = useRef();
 
  // ── Persistence ──────────────────────────────────────────────────────────────
@@ -123,11 +129,24 @@ export default function App() {
  (async () => {
  try { const r=await window.storage.get("driveFileId"); if(r){setDriveFileId(r.value);setDriveInput(r.value);} } catch{}
  try { const r=await window.storage.get("cards"); if(r) setCards(JSON.parse(r.value)); else setCards(SEED_CARDS); } catch { setCards(SEED_CARDS); }
+ try { const r=await window.storage.get("apiKey"); if(r){setApiKey(r.value);setApiKeyInput(r.value);} } catch{}
  })();
  }, []);
  useEffect(() => { if(cards.length>0) window.storage.set("cards",JSON.stringify(cards)).catch(()=>{}); }, [cards]);
 
  const showToast = (msg,type="success") => { setToast({msg,type}); setTimeout(()=>setToast(null),4000); };
+
+ const loginAdmin = async () => {
+ const key = apiKeyInput.trim();
+ if(!key.startsWith("sk-ant-")) { showToast("Chave inválida. Deve começar com sk-ant-","error"); return; }
+ setApiKey(key); await window.storage.set("apiKey",key).catch(()=>{});
+ setShowApiModal(false); showToast("Modo admin ativado!");
+ };
+ const logoutAdmin = async () => {
+ setApiKey(""); setApiKeyInput("");
+ await window.storage.delete("apiKey").catch(()=>{});
+ showToast("Modo admin desativado.","info");
+ };
 
  // ── Filtered & sorted cards ───────────────────────────────────────────────
  const displayCards = useMemo(() => {
@@ -173,7 +192,7 @@ export default function App() {
  const data=await callClaude({system:IDENTIFY_SYSTEM,messages:[{role:"user",content:[
  {type:"image",source:{type:"base64",media_type:file.type,data:b64}},
  {type:"text",text:"Identify ALL One Piece TCG cards visible. Return JSON array."},
- ]}]});
+ ]}]},apiKey);
  const text=data.content?.find(b=>b.type==="text")?.text||"[]";
  const batch=extractArray(text).map((c,i)=>({...c,quantity:1,condition:"NM",_tempId:Date.now()+i}));
  if(!batch.length) throw 0;
@@ -214,7 +233,7 @@ export default function App() {
  // ── Prices ────────────────────────────────────────────────────────────────
  const fetchPrice = async (card) => {
  const data=await callClaude({system:PRICE_SYSTEM,tools:[{type:"web_search_20250305",name:"web_search"}],
- messages:[{role:"user",content:`Find prices for One Piece TCG: "${card.nameEN||card.name}" (${card.cardNumber}, ${card.rarity}, ${card.language}).`}]});
+ messages:[{role:"user",content:`Find prices for One Piece TCG: "${card.nameEN||card.name}" (${card.cardNumber}, ${card.rarity}, ${card.language}).`}]},apiKey);
  const text=data.content?.find(b=>b.type==="text")?.text; if(!text) return null;
  try{const r=extractJSON(text); if(r.tcgplayer&&!r.tcgplayer.url) r.tcgplayer.url=tcgUrl(card); if(r.ligaonepiece&&!r.ligaonepiece.url) r.ligaonepiece.url=ligaUrl(card); return r;} catch{return null;}
  };
@@ -290,7 +309,7 @@ export default function App() {
  system:"You are a Google Drive assistant. Create the file and return the Google Sheets URL.",
  mcp_servers:[{type:"url",url:"https://drivemcp.googleapis.com/mcp/v1",name:"google-drive"}],
  messages:[{role:"user",content:`Create a Google Sheets file titled "One Piece TCG — Coleção (${today})" with mimeType "text/csv" and this base64 content: ${b64}\nReturn the URL.`}],
- });
+ },apiKey);
  const allText=(data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n");
  const urlMatch=allText.match(/https:\/\/docs\.google\.com\/spreadsheets\/[^\s"'\)\\]+/);
  if(urlMatch){
@@ -337,7 +356,7 @@ export default function App() {
  system: "You are a Google Drive assistant. Fetch the file content and return it as plain JSON text.",
  mcp_servers:[{type:"url",url:"https://drivemcp.googleapis.com/mcp/v1",name:"google-drive"}],
  messages:[{role:"user",content:`Read the file with ID "${driveFileId}" from Google Drive and return its full JSON content as plain text, nothing else.`}],
- });
+ },apiKey);
  const text = (data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n");
  const match = text.match(/\{[\s\S]*\}/);
  if(!match) throw new Error("No JSON found");
@@ -365,7 +384,7 @@ export default function App() {
         mcp_servers:[{type:"url",url:"https://drivemcp.googleapis.com/mcp/v1",name:"google-drive"}],
         messages:[{role:"user",content:`Create a Google Drive file with title "onepiece-tcg-collection.json", mimeType "application/json", disableConversionToGoogleType true, and this base64 content: ${b64}
 Return the new file ID as: FILE_ID=THE_ID`}],
-      });
+      },apiKey);
       const text = (data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n");
       const idMatch = text.match(/FILE_ID=([A-Za-z0-9_-]{10,})/);
       if(idMatch) {
@@ -417,6 +436,9 @@ Return the new file ID as: FILE_ID=THE_ID`}],
  <Stat label=" Valor (BRL)" value={`R$${totalValue.toFixed(2)}`} accent/>
  </>}
  </>}
+ {isAdmin
+ ? <button onClick={logoutAdmin} style={{background:"rgba(5,150,105,.15)",border:"1px solid rgba(5,150,105,.35)",color:"#34d399",borderRadius:8,padding:"6px 14px",cursor:"pointer",fontSize:12,fontWeight:700}}>Admin ✓</button>
+ : <button onClick={()=>setShowApiModal(true)} style={{background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.12)",color:"#475569",borderRadius:8,padding:"6px 14px",cursor:"pointer",fontSize:12,fontWeight:700}}>Admin</button>}
  </div>
  </header>
 
@@ -454,8 +476,8 @@ Return the new file ID as: FILE_ID=THE_ID`}],
 
  {/* ── Action bar ── */}
  {view!=="confirm"&&<div style={{display:"flex",gap:8,marginBottom:20,flexWrap:"wrap",alignItems:"center"}}>
- <Btn onClick={()=>fileRef.current?.click()} disabled={busy} gradient="linear-gradient(135deg,#dc2626,#991b1b)" shadow="rgba(220,38,38,.35)">Adicionar Foto (até 6 cartas)</Btn>
- {cards.length>0&&<>
+ {isAdmin&&<Btn onClick={()=>fileRef.current?.click()} disabled={busy} gradient="linear-gradient(135deg,#dc2626,#991b1b)" shadow="rgba(220,38,38,.35)">Adicionar Foto (até 6 cartas)</Btn>}
+ {cards.length>0&&isAdmin&&<>
  <Btn onClick={searchAllPrices} disabled={busy} gradient="linear-gradient(135deg,#059669,#064e3b)" shadow="rgba(5,150,105,.3)">
               {selectedIds.size>0?`Buscar Selecionadas (${selectedIds.size})`:"Buscar Preços"}
             </Btn>
@@ -463,6 +485,7 @@ Return the new file ID as: FILE_ID=THE_ID`}],
  <Btn onClick={exportToSheets} disabled={busy} gradient="linear-gradient(135deg,#2563eb,#1e3a8a)" shadow="rgba(37,99,235,.3)">Exportar para Sheets</Btn>
  <Btn onClick={exportCSV} disabled={busy} gradient="linear-gradient(135deg,#7c3aed,#4c1d95)" shadow="rgba(124,58,237,.3)">CSV</Btn>
  </>}
+ {isAdmin&&<>
  <button onClick={loadSeed} disabled={busy}
  style={{background:"rgba(251,191,36,.08)",border:"1px solid rgba(251,191,36,.2)",color:"#fbbf2490",borderRadius:9,padding:"10px 16px",cursor:"pointer",fontSize:13,fontWeight:700,transition:"all .2s"}}
  onMouseEnter={e=>{e.currentTarget.style.color="#fbbf24";e.currentTarget.style.background="rgba(251,191,36,.15)";}}
@@ -478,6 +501,8 @@ Return the new file ID as: FILE_ID=THE_ID`}],
  onMouseEnter={e=>{e.currentTarget.style.color="#ef4444";e.currentTarget.style.background="rgba(239,68,68,.08)";}}
  onMouseLeave={e=>{e.currentTarget.style.color="#ef444460";e.currentTarget.style.background="transparent";}}>
  Resetar tudo</button>
+ </>}
+ {!isAdmin&&cards.length===0&&<div style={{fontSize:13,color:"#334155"}}>Entre como admin para adicionar cartas.</div>}
  <input ref={fileRef} type="file" accept="image/*" onChange={handleFile} style={{display:"none"}}/>
  </div>}
 
@@ -682,7 +707,7 @@ Return the new file ID as: FILE_ID=THE_ID`}],
  : <span style={{color:"#1e293b"}}>—</span>}
  </td>
  {/* Actions */}
- <td style={{padding:"12px 10px"}}>
+ {isAdmin&&<td style={{padding:"12px 10px"}}>
  <div style={{display:"flex",gap:4}}>
  {isEditing
  ? <>
@@ -698,11 +723,41 @@ Return the new file ID as: FILE_ID=THE_ID`}],
  onMouseEnter={e=>{e.target.style.color="#ef4444";e.target.style.background="rgba(239,68,68,.1)";}} onMouseLeave={e=>{e.target.style.color="#ef444460";e.target.style.background="transparent";}}></button>
  </>}
  </div>
- </td>
+ </td>}
  </tr>;
  })}
  </tbody>
  </table>
+ </div>}
+
+ {/* ── API Key modal ── */}
+ {showApiModal&&<div onClick={()=>setShowApiModal(false)}
+ style={{position:"fixed",inset:0,zIndex:500,background:"rgba(0,0,0,.85)",display:"flex",alignItems:"center",justifyContent:"center",backdropFilter:"blur(4px)"}}>
+ <div onClick={e=>e.stopPropagation()} style={{background:"#0f172a",border:"1px solid rgba(251,191,36,.3)",borderRadius:16,padding:28,maxWidth:420,width:"90%",boxShadow:"0 24px 60px rgba(0,0,0,.7)"}}>
+ <div style={{fontSize:28,textAlign:"center",marginBottom:8}}></div>
+ <div style={{fontSize:16,fontWeight:800,color:"#fbbf24",textAlign:"center",marginBottom:4}}>Modo Admin</div>
+ <div style={{fontSize:12,color:"#475569",textAlign:"center",marginBottom:20}}>Cole sua Anthropic API key para desbloquear edição</div>
+ <div style={{position:"relative",marginBottom:16}}>
+ <input
+ type={showApiKeyText?"text":"password"}
+ value={apiKeyInput}
+ onChange={e=>setApiKeyInput(e.target.value)}
+ onKeyDown={e=>e.key==="Enter"&&loginAdmin()}
+ placeholder="sk-ant-api03-..."
+ autoFocus
+ style={{width:"100%",background:"rgba(255,255,255,.05)",border:"1px solid rgba(251,191,36,.3)",borderRadius:9,padding:"10px 44px 10px 14px",color:"#e2e8f0",fontSize:13,outline:"none",boxSizing:"border-box",fontFamily:"monospace"}}/>
+ <button onClick={()=>setShowApiKeyText(v=>!v)}
+ style={{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",background:"transparent",border:"none",color:"#475569",cursor:"pointer",fontSize:16,padding:4}}>
+ {showApiKeyText?"🙈":"👁"}</button>
+ </div>
+ <div style={{fontSize:11,color:"#334155",marginBottom:20,lineHeight:1.6}}>
+ A key fica salva apenas no seu browser (localStorage). Visitantes sem a key só visualizam a coleção.
+ </div>
+ <div style={{display:"flex",gap:10}}>
+ <button onClick={()=>setShowApiModal(false)} style={{flex:1,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.12)",borderRadius:9,padding:"11px",color:"#64748b",cursor:"pointer",fontSize:14,fontWeight:600}}>Cancelar</button>
+ <button onClick={loginAdmin} style={{flex:1,background:"linear-gradient(135deg,#fbbf24,#d97706)",border:"none",borderRadius:9,padding:"11px",color:"#000",cursor:"pointer",fontSize:14,fontWeight:800,boxShadow:"0 4px 20px rgba(251,191,36,.3)"}}>Entrar</button>
+ </div>
+ </div>
  </div>}
 
  {/* ── Reset modal ── */}
