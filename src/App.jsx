@@ -61,6 +61,8 @@ const RARITY = { C:{c:"#94a3b8",l:"C"}, UC:{c:"#22c55e",l:"UC"}, R:{c:"#3b82f6",
 const CONDITIONS = ["NM","LP","MP","HP","DMG"];
 const langFlag = (l) => l==="JP"?"🇯🇵":"🇺🇸";
 
+const cardImg = (c) => `https://en.onepiece-cardgame.com/images/card/en/${c.setCode}/${c.cardNumber}.png`;
+
 const tcgUrl = (c) => `https://www.tcgplayer.com/search/one-piece-card-game/product?q=${encodeURIComponent(c.cardNumber)}`;
 const ligaUrl = (c) => {
  const numPad = c.cardNumber.split("-")[1];
@@ -113,6 +115,7 @@ export default function App() {
  const [sortBy, setSortBy] = useState("name");
  const [sortDir, setSortDir] = useState("asc");
  const [selectedIds, setSelectedIds] = useState(new Set());
+ const [gridView, setGridView] = useState(false);
  // Inline editing
  const [editingId, setEditingId] = useState(null);
  const [editValues, setEditValues] = useState({});
@@ -534,6 +537,9 @@ Return the new file ID as: FILE_ID=THE_ID`}],
  <button onClick={()=>setSortDir(d=>d==="asc"?"desc":"asc")}
  style={{background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",borderRadius:7,padding:"7px 12px",color:"#94a3b8",cursor:"pointer",fontSize:14}}>
  {sortDir==="asc"?"↑":"↓"}</button>
+ <button onClick={()=>setGridView(v=>!v)}
+ style={{background:gridView?"rgba(251,191,36,.15)":"rgba(255,255,255,.05)",border:`1px solid ${gridView?"rgba(251,191,36,.4)":"rgba(255,255,255,.1)"}`,borderRadius:7,padding:"7px 12px",color:gridView?"#fbbf24":"#94a3b8",cursor:"pointer",fontSize:14}}>
+ {gridView?"☰":"⊞"}</button>
  </div>
  {(filterSet||filterRarity||filterLang||filterCond)&&
  <button onClick={()=>{setFilterSet("");setFilterRarity("");setFilterLang("");setFilterCond("");}}
@@ -634,8 +640,44 @@ Return the new file ID as: FILE_ID=THE_ID`}],
  <div style={{fontSize:14,color:"#334155"}}>Tire uma foto com <strong style={{color:"#ef4444"}}>até 6 cartas</strong> lado a lado para começar</div>
  </div>}
 
+ {/* ── Grid view ── */}
+ {cards.length>0&&view==="collection"&&gridView&&<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:16}}>
+ {displayCards.map(card=>{
+ const tcp=card.prices?.tcgplayer, liga=card.prices?.ligaonepiece, avg=calcAvg(tcp,liga);
+ const rm=RARITY[card.rarity]||RARITY["C"];
+ return <div key={card.id} style={{background:"rgba(255,255,255,.025)",border:"1px solid rgba(255,255,255,.07)",borderRadius:14,overflow:"hidden",transition:"transform .2s,border-color .2s"}}
+ onMouseEnter={e=>{ e.currentTarget.style.transform="translateY(-3px)"; e.currentTarget.style.borderColor="rgba(251,191,36,.25)"; }}
+ onMouseLeave={e=>{ e.currentTarget.style.transform=""; e.currentTarget.style.borderColor="rgba(255,255,255,.07)"; }}>
+ <div style={{position:"relative",background:"#0a0f1a",aspectRatio:"63/88",overflow:"hidden"}}>
+ <img src={cardImg(card)} alt={card.nameEN||card.name}
+ style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}
+ onError={e=>{e.target.style.display="none"; e.target.nextSibling.style.display="flex";}}/>
+ <div style={{display:"none",position:"absolute",inset:0,alignItems:"center",justifyContent:"center",flexDirection:"column",gap:8,color:"#1e293b"}}>
+ <div style={{fontSize:32}}>🃏</div>
+ <div style={{fontSize:10,color:"#334155",textAlign:"center",padding:"0 8px"}}>{card.cardNumber}</div>
+ </div>
+ <div style={{position:"absolute",top:8,right:8}}>
+ <span style={{background:`${rm.c}cc`,border:`1px solid ${rm.c}`,color:"white",borderRadius:5,padding:"2px 7px",fontSize:10,fontWeight:800}}>{card.rarity}</span>
+ </div>
+ {isAdmin&&<div style={{position:"absolute",top:8,left:8,display:"flex",flexDirection:"column",gap:4}}>
+ <button onClick={()=>retryPrice(card.id)} title="Atualizar preço" style={{background:"rgba(0,0,0,.6)",border:"1px solid rgba(96,165,250,.4)",color:"#60a5fa",borderRadius:5,padding:"3px 6px",cursor:"pointer",fontSize:10}}>💲</button>
+ <button onClick={()=>removeCard(card.id)} title="Remover" style={{background:"rgba(0,0,0,.6)",border:"1px solid rgba(239,68,68,.4)",color:"#ef4444",borderRadius:5,padding:"3px 6px",cursor:"pointer",fontSize:10}}>✕</button>
+ </div>}
+ </div>
+ <div style={{padding:"10px 12px"}}>
+ <div style={{fontWeight:700,color:"#e2e8f0",fontSize:13,marginBottom:2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{card.nameEN||card.name}</div>
+ <div style={{fontSize:11,color:"#475569",marginBottom:8}}>{card.cardNumber} · {langFlag(card.language)}</div>
+ {avg
+ ? <div style={{fontWeight:900,color:"#fbbf24",fontSize:15}}>R${avg}</div>
+ : <div style={{fontSize:11,color:"#334155"}}>Sem preço</div>}
+ {tcp?.price&&<div style={{fontSize:10,color:"#3b82f6",marginTop:2}}>${tcp.price.toFixed(2)} USD</div>}
+ </div>
+ </div>;
+ })}
+ </div>}
+
  {/* ── Collection table ── */}
- {cards.length>0&&view==="collection"&&<div style={{background:"rgba(255,255,255,.018)",border:"1px solid rgba(255,255,255,.06)",borderRadius:14,overflow:"auto"}}>
+ {cards.length>0&&view==="collection"&&!gridView&&<div style={{background:"rgba(255,255,255,.018)",border:"1px solid rgba(255,255,255,.06)",borderRadius:14,overflow:"auto"}}>
  <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
  <thead>
  <tr style={{background:"rgba(251,191,36,.04)",borderBottom:"1px solid rgba(251,191,36,.12)"}}>
