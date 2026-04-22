@@ -148,6 +148,7 @@ export default function App() {
  av=parseFloat(calcAvg(a.prices?.tcgplayer,a.prices?.ligaonepiece)||0);
  bv=parseFloat(calcAvg(b.prices?.tcgplayer,b.prices?.ligaonepiece)||0);
  }
+ else if(sortBy==="addedAt") { av=a.addedAt||""; bv=b.addedAt||""; }
  if(typeof av==="string") return sortDir==="asc"?av.localeCompare(bv):bv.localeCompare(av);
  return sortDir==="asc"?av-bv:bv-av;
  });
@@ -189,11 +190,12 @@ export default function App() {
  if(!toAdd.length){showToast("Nenhuma carta selecionada.","error");return;}
  let added=0,updated=0;
  setCards(prev=>{let next=[...prev];
+ const now=new Date().toISOString();
  for(const card of toAdd){
  const {_tempId,...clean}=card;
  const idx=next.findIndex(c=>cardKey(c)===cardKey(clean));
  if(idx>=0){next[idx]={...next[idx],quantity:next[idx].quantity+clean.quantity};updated++;}
- else{next.push({...clean,id:Date.now()+Math.random()});added++;}
+ else{next.push({...clean,id:Date.now()+Math.random(),addedAt:now});added++;}
  }
  return next;
  });
@@ -271,14 +273,15 @@ export default function App() {
  setBusy(true); setSheetError(null); setBusyMsg(" Criando planilha...");
  const today=new Date().toLocaleDateString("pt-BR");
  const headers=["Nome","Nome EN","Set","Número","Raridade","Idioma","Condição","Qtd",
- "Preço TCGPlayer (USD)","Link TCGPlayer","Preço Liga OP (BRL)","Link Liga OP","Preço Médio (BRL)"];
+ "Preço TCGPlayer (USD)","Link TCGPlayer","Preço Liga OP (BRL)","Link Liga OP","Preço Médio (BRL)","Adicionada em"];
  const csvRows=cards.map((c,i)=>{
  const rn=i+2;
  const avg=`=IF(AND(I${rn}<>"",K${rn}<>""),AVERAGE(I${rn}*${USD_BRL},K${rn}),IF(I${rn}<>"",I${rn}*${USD_BRL},K${rn}))`;
  const tcp=c.prices?.tcgplayer, liga=c.prices?.ligaonepiece;
  return [c.name,c.nameEN||c.name,c.setCode,c.cardNumber,c.rarity,c.language,c.condition||"NM",c.quantity,
  tcp?.price?.toFixed(2)||"", tcp?.url||tcgUrl(c),
- liga?.price?.toFixed(2)||"", liga?.url||ligaUrl(c), avg].map(q).join(",");
+ liga?.price?.toFixed(2)||"", liga?.url||ligaUrl(c), avg,
+ c.addedAt?new Date(c.addedAt).toLocaleDateString("pt-BR"):""].map(q).join(",");
  });
  const csv="\uFEFF"+[headers.map(q).join(","),...csvRows].join("\n");
  const b64=btoa(unescape(encodeURIComponent(csv)));
@@ -307,12 +310,13 @@ export default function App() {
  };
 
  const exportCSV = () => {
- const headers=["Nome","Nome EN","Set","Número","Raridade","Idioma","Condição","Qtd","Preço TCGPlayer (USD)","Link TCGPlayer","Preço Liga OP (BRL)","Link Liga OP","Preço Médio (BRL)"];
+ const headers=["Nome","Nome EN","Set","Número","Raridade","Idioma","Condição","Qtd","Preço TCGPlayer (USD)","Link TCGPlayer","Preço Liga OP (BRL)","Link Liga OP","Preço Médio (BRL)","Adicionada em"];
  const rows=cards.map((c,i)=>{
  const rn=i+2; const tcp=c.prices?.tcgplayer, liga=c.prices?.ligaonepiece;
  const avg=calcAvg(tcp,liga)||"";
  return [c.name,c.nameEN||c.name,c.setCode,c.cardNumber,c.rarity,c.language,c.condition||"NM",c.quantity,
- tcp?.price?.toFixed(2)||"",tcp?.url||tcgUrl(c),liga?.price?.toFixed(2)||"",liga?.url||ligaUrl(c),avg].map(q).join(",");
+ tcp?.price?.toFixed(2)||"",tcp?.url||tcgUrl(c),liga?.price?.toFixed(2)||"",liga?.url||ligaUrl(c),avg,
+ c.addedAt?new Date(c.addedAt).toLocaleDateString("pt-BR"):""].map(q).join(",");
  });
  const csv="\uFEFF"+[headers.map(q).join(","),...rows].join("\n");
  const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8;"}));
@@ -484,7 +488,7 @@ Return the new file ID as: FILE_ID=THE_ID`}],
  <Select value={filterLang} onChange={setFilterLang} options={["","EN","JP"]} labels={["Idioma","EN 🇺🇸","JP 🇯🇵"]} label="Idioma"/>
  <Select value={filterCond} onChange={setFilterCond} options={["","NM","LP","MP","HP","DMG"]} labels={["Condição","NM","LP","MP","HP","DMG"]} label="Condição"/>
  <div style={{marginLeft:"auto",display:"flex",gap:8,alignItems:"center"}}>
- <Select value={sortBy} onChange={setSortBy} options={["name","set","rarity","price"]} labels={["Nome","Set","Raridade","Preço"]} label="Ordenar"/>
+ <Select value={sortBy} onChange={setSortBy} options={["name","set","rarity","price","addedAt"]} labels={["Nome","Set","Raridade","Preço","Data de adição"]} label="Ordenar"/>
  <button onClick={()=>setSortDir(d=>d==="asc"?"desc":"asc")}
  style={{background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",borderRadius:7,padding:"7px 12px",color:"#94a3b8",cursor:"pointer",fontSize:14}}>
  {sortDir==="asc"?"↑":"↓"}</button>
@@ -597,7 +601,7 @@ Return the new file ID as: FILE_ID=THE_ID`}],
  <thead>
  <tr style={{background:"rgba(251,191,36,.04)",borderBottom:"1px solid rgba(251,191,36,.12)"}}>
  <th style={{padding:"12px 10px",width:36}}><input type="checkbox" checked={displayCards.length>0&&selectedIds.size===displayCards.length} onChange={toggleSelectAll} style={{cursor:"pointer",width:15,height:15,accentColor:"#fbbf24"}}/></th>
- {["Carta","Set / Nº","Raridade","Idioma","Cond.","Qtd","TCGPlayer","Liga OP","Média (BRL)",""].map(h=>(
+ {["Carta","Set / Nº","Raridade","Idioma","Cond.","Qtd","TCGPlayer","Liga OP","Média (BRL)","Adicionada",""].map(h=>(
  <th key={h} style={{padding:"12px 14px",textAlign:"left",color:"#475569",fontWeight:700,fontSize:10,textTransform:"uppercase",letterSpacing:1.2,whiteSpace:"nowrap"}}>{h}</th>
  ))}
  </tr>
@@ -670,6 +674,12 @@ Return the new file ID as: FILE_ID=THE_ID`}],
  {/* Average */}
  <td style={{padding:"12px 14px"}}>
  {avg?<span style={{fontWeight:900,color:"#fbbf24",fontSize:14}}>R${avg}</span>:<span style={{color:"#1e293b"}}>—</span>}
+ </td>
+ {/* Added date */}
+ <td style={{padding:"12px 14px",whiteSpace:"nowrap"}}>
+ {card.addedAt
+ ? <span style={{color:"#94a3b8",fontSize:12}}>{new Date(card.addedAt).toLocaleDateString("pt-BR")}</span>
+ : <span style={{color:"#1e293b"}}>—</span>}
  </td>
  {/* Actions */}
  <td style={{padding:"12px 10px"}}>
