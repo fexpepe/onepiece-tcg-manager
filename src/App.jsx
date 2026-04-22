@@ -88,6 +88,7 @@ const SEED_CARDS = [
  {id:1016,name:"Ice Block: Pheasant Peck",nameEN:"Ice Block: Pheasant Peck",setCode:"OP12",cardNumber:"OP12-057",rarity:"C",language:"EN",color:"Blue",quantity:1,condition:"NM"},
  {id:1017,name:"I Re-Quasar Helllp!!",nameEN:"I Re-Quasar Helllp!!",setCode:"OP07",cardNumber:"OP07-115",rarity:"C",language:"EN",color:"Yellow",quantity:1,condition:"NM"},
  {id:1018,name:"Keep Out",nameEN:"Keep Out",setCode:"OP07",cardNumber:"OP07-018",rarity:"C",language:"EN",color:"Red",quantity:1,condition:"NM"},
+ {id:1019,name:"Wyper",nameEN:"Wyper",setCode:"OP15",cardNumber:"OP15-114",rarity:"SR",language:"EN",color:"Yellow",quantity:1,condition:"NM"},
 ];
 
 // ── Main ──────────────────────────────────────────────────────────────────────
