@@ -52,7 +52,7 @@ const extractArray = (t) => { const m=t.replace(/```json\n?|```/g,"").trim().mat
 const extractJSON = (t) => { const m=t.replace(/```json\n?|```/g,"").trim().match(/\{[\s\S]*\}/); if(!m) throw 0; return JSON.parse(m[0]); };
 
 const USD_BRL = 5.75;
-const GIST_ID = ""; // preenchido após o primeiro saveToGist
+const GIST_ID = "dd4e9c0f027be3c6c28626a6a71da288";
 const calcAvg = (tcp, liga) => { const a=tcp?.price?tcp.price*USD_BRL:null, b=liga?.price||null; if(a&&b) return ((a+b)/2).toFixed(2); return (a||b)?(a||b).toFixed(2):null; };
 const cardKey = (c) => `${c.cardNumber}__${c.language}`;
 
