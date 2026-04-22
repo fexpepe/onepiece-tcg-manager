@@ -126,13 +126,31 @@ export default function App() {
  // ── Persistence ──────────────────────────────────────────────────────────────
  useEffect(() => {
  (async () => {
- try { const r=await window.storage.get("gistId"); if(r) setGistId(r.value); } catch{}
- try { const r=await window.storage.get("githubToken"); if(r){setGithubToken(r.value);setGithubTokenInput(r.value);} } catch{}
- try { const r=await window.storage.get("cards"); if(r) setCards(JSON.parse(r.value)); else setCards(SEED_CARDS); } catch { setCards(SEED_CARDS); }
+ let savedGistId = GIST_ID;
+ let savedToken = "";
+ try { const r=await window.storage.get("gistId"); if(r){savedGistId=r.value; setGistId(r.value);} } catch{}
+ try { const r=await window.storage.get("githubToken"); if(r){savedToken=r.value; setGithubToken(r.value);setGithubTokenInput(r.value);} } catch{}
  try { const r=await window.storage.get("apiKey"); if(r){setApiKey(r.value);setApiKeyInput(r.value);} } catch{}
+ // Gist é a fonte da verdade — carrega dele se disponível
+ if(savedGistId) {
+ try {
+ const headers = savedToken ? {Authorization:`Bearer ${savedToken}`} : {};
+ const res = await fetch(`https://api.github.com/gists/${savedGistId}`,{headers});
+ if(!res.ok) throw new Error(`${res.status}`);
+ const data = await res.json();
+ const content = data.files?.["collection.json"]?.content;
+ if(!content) throw new Error("empty");
+ const parsed = JSON.parse(content);
+ const loaded = parsed.cards ?? parsed;
+ setCards(loaded); await window.storage.set("cards",JSON.stringify(loaded));
+ return;
+ } catch(e) { console.warn("Gist load failed, falling back to localStorage",e); }
+ }
+ // Fallback: localStorage
+ try { const r=await window.storage.get("cards"); if(r) setCards(JSON.parse(r.value)); } catch{}
  })();
  }, []);
- useEffect(() => { if(cards.length>0) window.storage.set("cards",JSON.stringify(cards)).catch(()=>{}); }, [cards]);
+ useEffect(() => { window.storage.set("cards",JSON.stringify(cards)).catch(()=>{}); }, [cards]);
 
  const showToast = (msg,type="success") => { setToast({msg,type}); setTimeout(()=>setToast(null),4000); };
 
@@ -350,13 +368,19 @@ export default function App() {
  };
 
  const resetAll = async () => {
- setCards([]); setGistId(GIST_ID);
+ setCards([]);
  setFilterSet(""); setFilterRarity(""); setFilterLang(""); setFilterCond("");
  setView("collection"); setShowResetModal(false);
- await Promise.all([
- window.storage.set("cards","[]").catch(()=>{}),
- window.storage.delete("gistId").catch(()=>{}),
- ]);
+ await window.storage.set("cards","[]").catch(()=>{});
+ // Propaga reset para o Gist (fonte da verdade)
+ if(gistId && githubToken) {
+ try {
+ const payload = JSON.stringify({cards:[],updatedAt:new Date().toISOString().slice(0,10)},null,2);
+ await fetch(`https://api.github.com/gists/${gistId}`,{method:"PATCH",
+ headers:{Authorization:`Bearer ${githubToken}`,"Content-Type":"application/json"},
+ body:JSON.stringify({files:{"collection.json":{content:payload}}})});
+ } catch(e) { console.warn("Gist reset failed",e); }
+ }
  showToast("Tudo resetado!","info");
  };
  const loadSeed = async () => {
