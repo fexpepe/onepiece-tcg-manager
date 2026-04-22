@@ -52,7 +52,7 @@ const extractArray = (t) => { const m=t.replace(/```json\n?|```/g,"").trim().mat
 const extractJSON = (t) => { const m=t.replace(/```json\n?|```/g,"").trim().match(/\{[\s\S]*\}/); if(!m) throw 0; return JSON.parse(m[0]); };
 
 const USD_BRL = 5.75;
-const DRIVE_FILE_ID = "1qSfoxdPVKFlzTI69mZP870zUFJP2O12S"; // onepiece-tcg-collection.json
+const GIST_ID = ""; // preenchido após o primeiro saveToGist
 const calcAvg = (tcp, liga) => { const a=tcp?.price?tcp.price*USD_BRL:null, b=liga?.price||null; if(a&&b) return ((a+b)/2).toFixed(2); return (a||b)?(a||b).toFixed(2):null; };
 const cardKey = (c) => `${c.cardNumber}__${c.language}`;
 
@@ -98,10 +98,9 @@ export default function App() {
  const [imgPreview, setImgPreview] = useState(null);
  const [busy, setBusy] = useState(false);
  const [busyMsg, setBusyMsg] = useState("");
- const [driveFileId, setDriveFileId] = useState(DRIVE_FILE_ID);
- const [driveInput, setDriveInput] = useState(DRIVE_FILE_ID);
- const [showDriveInput, setShowDriveInput] = useState(false);
- const [sheetError, setSheetError] = useState(null);
+ const [gistId, setGistId] = useState(GIST_ID);
+ const [githubToken, setGithubToken] = useState("");
+ const [githubTokenInput, setGithubTokenInput] = useState("");
  const [toast, setToast] = useState(null);
  const [removedIds, setRemovedIds] = useState(new Set());
  const [showResetModal, setShowResetModal] = useState(false);
@@ -127,7 +126,8 @@ export default function App() {
  // ── Persistence ──────────────────────────────────────────────────────────────
  useEffect(() => {
  (async () => {
- try { const r=await window.storage.get("driveFileId"); if(r){setDriveFileId(r.value);setDriveInput(r.value);} } catch{}
+ try { const r=await window.storage.get("gistId"); if(r) setGistId(r.value); } catch{}
+ try { const r=await window.storage.get("githubToken"); if(r){setGithubToken(r.value);setGithubTokenInput(r.value);} } catch{}
  try { const r=await window.storage.get("cards"); if(r) setCards(JSON.parse(r.value)); else setCards(SEED_CARDS); } catch { setCards(SEED_CARDS); }
  try { const r=await window.storage.get("apiKey"); if(r){setApiKey(r.value);setApiKeyInput(r.value);} } catch{}
  })();
@@ -140,11 +140,17 @@ export default function App() {
  const key = apiKeyInput.trim();
  if(!key.startsWith("sk-ant-")) { showToast("Chave inválida. Deve começar com sk-ant-","error"); return; }
  setApiKey(key); await window.storage.set("apiKey",key).catch(()=>{});
+ const ghToken = githubTokenInput.trim();
+ if(ghToken) { setGithubToken(ghToken); await window.storage.set("githubToken",ghToken).catch(()=>{}); }
  setShowApiModal(false); showToast("Modo admin ativado!");
  };
  const logoutAdmin = async () => {
  setApiKey(""); setApiKeyInput("");
- await window.storage.delete("apiKey").catch(()=>{});
+ setGithubToken(""); setGithubTokenInput("");
+ await Promise.all([
+ window.storage.delete("apiKey").catch(()=>{}),
+ window.storage.delete("githubToken").catch(()=>{}),
+ ]);
  showToast("Modo admin desativado.","info");
  };
 
@@ -285,48 +291,49 @@ export default function App() {
     setBusy(false); showToast(`Preços atualizados! (${upd.length} cartas)`);
   };
 
- // ── Sheet export ──────────────────────────────────────────────────────────
- const q = (v) => '"'+String(v).replace(/"/g,'""')+'"';
-
- const exportToSheets = async () => {
- setBusy(true); setSheetError(null); setBusyMsg(" Criando planilha...");
- const today=new Date().toLocaleDateString("pt-BR");
- const headers=["Nome","Nome EN","Set","Número","Raridade","Idioma","Condição","Qtd",
- "Preço TCGPlayer (USD)","Link TCGPlayer","Preço Liga OP (BRL)","Link Liga OP","Preço Médio (BRL)","Adicionada em"];
- const csvRows=cards.map((c,i)=>{
- const rn=i+2;
- const avg=`=IF(AND(I${rn}<>"",K${rn}<>""),AVERAGE(I${rn}*${USD_BRL},K${rn}),IF(I${rn}<>"",I${rn}*${USD_BRL},K${rn}))`;
- const tcp=c.prices?.tcgplayer, liga=c.prices?.ligaonepiece;
- return [c.name,c.nameEN||c.name,c.setCode,c.cardNumber,c.rarity,c.language,c.condition||"NM",c.quantity,
- tcp?.price?.toFixed(2)||"", tcp?.url||tcgUrl(c),
- liga?.price?.toFixed(2)||"", liga?.url||ligaUrl(c), avg,
- c.addedAt?new Date(c.addedAt).toLocaleDateString("pt-BR"):""].map(q).join(",");
- });
- const csv="\uFEFF"+[headers.map(q).join(","),...csvRows].join("\n");
- const b64=btoa(unescape(encodeURIComponent(csv)));
+ // ── GitHub Gist ───────────────────────────────────────────────────────────
+ const loadFromGist = async () => {
+ if(!gistId){showToast("Nenhum Gist configurado. Salve primeiro.","error");return;}
+ setBusy(true); setBusyMsg("Carregando do GitHub...");
  try {
- const data=await callClaude({
- system:"You are a Google Drive assistant. Create the file and return the Google Sheets URL.",
- mcp_servers:[{type:"url",url:"https://drivemcp.googleapis.com/mcp/v1",name:"google-drive"}],
- messages:[{role:"user",content:`Create a Google Sheets file titled "One Piece TCG — Coleção (${today})" with mimeType "text/csv" and this base64 content: ${b64}\nReturn the URL.`}],
- },apiKey);
- const allText=(data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("\n");
- const urlMatch=allText.match(/https:\/\/docs\.google\.com\/spreadsheets\/[^\s"'\)\\]+/);
- if(urlMatch){
- const url=urlMatch[0]; setSheetUrl(url); setSheetInput(url);
- 
- showToast(` ${cards.length} cartas exportadas!`);
- } else setSheetError("Não foi possível capturar o link. Verifique o Google Drive.");
- } catch { setSheetError("Erro ao exportar. Use o CSV como alternativa."); }
+ const headers = githubToken ? {Authorization:`Bearer ${githubToken}`} : {};
+ const res = await fetch(`https://api.github.com/gists/${gistId}`,{headers});
+ if(!res.ok) throw new Error(`${res.status}`);
+ const data = await res.json();
+ const content = data.files?.["collection.json"]?.content;
+ if(!content) throw new Error("file not found");
+ const parsed = JSON.parse(content);
+ const loaded = parsed.cards || parsed;
+ setCards(loaded); await window.storage.set("cards",JSON.stringify(loaded));
+ showToast(`${loaded.length} cartas carregadas do GitHub!`);
+ } catch(e) {
+ console.error(e); setCards(SEED_CARDS);
+ await window.storage.set("cards",JSON.stringify(SEED_CARDS));
+ showToast(`Erro no Gist, usando seed local (${SEED_CARDS.length} cartas)`,"info");
+ } finally { setBusy(false); }
+ };
+
+ const saveToGist = async () => {
+ if(!githubToken){showToast("GitHub Token necessário para salvar.","error");return;}
+ setBusy(true); setBusyMsg("Salvando no GitHub...");
+ try {
+ const payload = JSON.stringify({cards,updatedAt:new Date().toISOString().slice(0,10)},null,2);
+ const body = {description:"One Piece TCG Collection",public:false,files:{"collection.json":{content:payload}}};
+ const url = gistId ? `https://api.github.com/gists/${gistId}` : "https://api.github.com/gists";
+ const res = await fetch(url,{method:gistId?"PATCH":"POST",
+ headers:{Authorization:`Bearer ${githubToken}`,"Content-Type":"application/json"},
+ body:JSON.stringify(body)});
+ if(!res.ok) throw new Error(`${res.status}`);
+ const data = await res.json();
+ const newId = data.id;
+ setGistId(newId); await window.storage.set("gistId",newId);
+ showToast(`${cards.length} cartas salvas no GitHub! ${!gistId?"Gist criado — atualize GIST_ID no código.":""}`);
+ } catch(e) { console.error(e); showToast("Erro ao salvar no GitHub.","error"); }
  finally { setBusy(false); }
  };
 
- const linkDrive = () => {
- const id = driveInput.trim();
- if(!id){showToast("ID inválido.","error");return;}
- setDriveFileId(id); window.storage.set("driveFileId",id).catch(()=>{});
- setShowDriveInput(false); showToast("Arquivo JSON vinculado! ");
- };
+ // ── CSV export ────────────────────────────────────────────────────────────
+ const q = (v) => '"'+String(v).replace(/"/g,'""')+'"';
 
  const exportCSV = () => {
  const headers=["Nome","Nome EN","Set","Número","Raridade","Idioma","Condição","Qtd","Preço TCGPlayer (USD)","Link TCGPlayer","Preço Liga OP (BRL)","Link Liga OP","Preço Médio (BRL)","Adicionada em"];
@@ -343,10 +350,10 @@ export default function App() {
  };
 
  const resetAll = async () => {
- setCards([]); setDriveFileId(DRIVE_FILE_ID); setDriveInput(DRIVE_FILE_ID); setSheetError(null);
+ setCards([]); setGistId(GIST_ID);
  setFilterSet(""); setFilterRarity(""); setFilterLang(""); setFilterCond("");
  setView("collection"); setShowResetModal(false);
- await Promise.all([window.storage.delete("cards").catch(()=>{}),window.storage.delete("driveFileId").catch(()=>{})]);
+ await Promise.all([window.storage.delete("cards").catch(()=>{}),window.storage.delete("gistId").catch(()=>{})]);
  showToast("Tudo resetado!","info");
  };
  const loadSeed = async () => {
@@ -444,34 +451,17 @@ Return the new file ID as: FILE_ID=THE_ID`}],
 
  <main style={{maxWidth:1300,margin:"0 auto",padding:"24px",position:"relative",zIndex:1}}>
 
- {/* ── Drive JSON panel ── */}
- <div style={{background:"rgba(255,255,255,.025)",border:"1px solid rgba(255,255,255,.07)",borderRadius:12,padding:"12px 16px",marginBottom:16}}>
- <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
- <span style={{fontSize:16}}></span>
+ {/* ── Gist panel ── */}
+ <div style={{background:"rgba(255,255,255,.025)",border:"1px solid rgba(255,255,255,.07)",borderRadius:12,padding:"12px 16px",marginBottom:16,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+ <span style={{fontSize:16}}>🐙</span>
  <div style={{flex:1,fontSize:13,color:"#93c5fd"}}>
- Arquivo JSON vinculado —&nbsp;
- <span style={{fontSize:11,color:"#334155",fontFamily:"monospace"}}>{driveFileId}</span>
+ {gistId
+ ? <>Gist vinculado —&nbsp;<span style={{fontSize:11,color:"#334155",fontFamily:"monospace"}}>{gistId}</span></>
+ : <span style={{color:"#334155"}}>Nenhum Gist configurado — entre como admin e clique "Salvar no GitHub".</span>}
  </div>
- <div style={{display:"flex",gap:8}}>
- <a href={`https://drive.google.com/file/d/${driveFileId}/view`} target="_blank" rel="noreferrer"
+ {gistId&&<a href={`https://gist.github.com/${gistId}`} target="_blank" rel="noreferrer"
  style={{background:"rgba(37,99,235,.15)",color:"#60a5fa",borderRadius:7,padding:"6px 14px",fontSize:12,fontWeight:700,textDecoration:"none"}}>
- Ver no Drive ↗</a>
- <button onClick={()=>setShowDriveInput(v=>!v)}
- style={{background:"rgba(251,191,36,.1)",border:"1px solid rgba(251,191,36,.25)",color:"#fbbf24",borderRadius:7,padding:"6px 14px",fontSize:12,fontWeight:700,cursor:"pointer"}}>
- Trocar arquivo</button>
- </div>
- </div>
- {showDriveInput&&<div style={{display:"flex",gap:8,marginTop:10,alignItems:"center"}}>
- <div style={{fontSize:12,color:"#475569",whiteSpace:"nowrap"}}>ID do arquivo:</div>
- <input value={driveInput} onChange={e=>setDriveInput(e.target.value)}
- placeholder="Cole aqui o ID do arquivo JSON no Drive…"
- style={{flex:1,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",borderRadius:7,padding:"8px 12px",color:"#e2e8f0",fontSize:13,outline:"none",fontFamily:"monospace"}}
- onFocus={e=>e.target.style.borderColor="rgba(251,191,36,.4)"} onBlur={e=>e.target.style.borderColor="rgba(255,255,255,.1)"}
- onKeyDown={e=>e.key==="Enter"&&linkDrive()}/>
- <Btn onClick={linkDrive} gradient="linear-gradient(135deg,#059669,#064e3b)" shadow="rgba(5,150,105,.3)">Vincular</Btn>
- <button onClick={()=>setShowDriveInput(false)}
- style={{background:"transparent",border:"1px solid rgba(255,255,255,.1)",borderRadius:7,padding:"8px 12px",color:"#475569",cursor:"pointer",fontSize:13}}></button>
- </div>}
+ Ver no GitHub ↗</a>}
  </div>
 
  {/* ── Action bar ── */}
@@ -482,20 +472,19 @@ Return the new file ID as: FILE_ID=THE_ID`}],
               {selectedIds.size>0?`Buscar Selecionadas (${selectedIds.size})`:"Buscar Preços"}
             </Btn>
  <Btn onClick={updateAllPrices} disabled={busy} gradient="linear-gradient(135deg,#0891b2,#0c4a6e)" shadow="rgba(8,145,178,.3)">Atualizar Preços</Btn>
- <Btn onClick={exportToSheets} disabled={busy} gradient="linear-gradient(135deg,#2563eb,#1e3a8a)" shadow="rgba(37,99,235,.3)">Exportar para Sheets</Btn>
  <Btn onClick={exportCSV} disabled={busy} gradient="linear-gradient(135deg,#7c3aed,#4c1d95)" shadow="rgba(124,58,237,.3)">CSV</Btn>
  </>}
  {isAdmin&&<>
- <button onClick={loadSeed} disabled={busy}
+ <button onClick={loadFromGist} disabled={busy}
  style={{background:"rgba(251,191,36,.08)",border:"1px solid rgba(251,191,36,.2)",color:"#fbbf2490",borderRadius:9,padding:"10px 16px",cursor:"pointer",fontSize:13,fontWeight:700,transition:"all .2s"}}
  onMouseEnter={e=>{e.currentTarget.style.color="#fbbf24";e.currentTarget.style.background="rgba(251,191,36,.15)";}}
  onMouseLeave={e=>{e.currentTarget.style.color="#fbbf2490";e.currentTarget.style.background="rgba(251,191,36,.08)";}}>
- Carregar do Drive</button>
- <button onClick={saveToDrive} disabled={busy}
+ Carregar do GitHub</button>
+ <button onClick={saveToGist} disabled={busy}
  style={{background:"rgba(14,165,233,.08)",border:"1px solid rgba(14,165,233,.2)",color:"#38bdf890",borderRadius:9,padding:"10px 16px",cursor:"pointer",fontSize:13,fontWeight:700,transition:"all .2s"}}
  onMouseEnter={e=>{e.currentTarget.style.color="#38bdf8";e.currentTarget.style.background="rgba(14,165,233,.15)";}}
  onMouseLeave={e=>{e.currentTarget.style.color="#38bdf890";e.currentTarget.style.background="rgba(14,165,233,.08)";}}>
- Salvar no Drive</button>
+ Salvar no GitHub</button>
  <button onClick={()=>setShowResetModal(true)}
  style={{marginLeft:"auto",background:"transparent",border:"1px solid rgba(239,68,68,.2)",color:"#ef444460",borderRadius:9,padding:"10px 16px",cursor:"pointer",fontSize:13,fontWeight:700,transition:"all .2s"}}
  onMouseEnter={e=>{e.currentTarget.style.color="#ef4444";e.currentTarget.style.background="rgba(239,68,68,.08)";}}
@@ -529,9 +518,6 @@ Return the new file ID as: FILE_ID=THE_ID`}],
  {busy&&<div style={{background:"rgba(251,191,36,.04)",border:"1px solid rgba(251,191,36,.18)",borderRadius:10,padding:"14px 18px",marginBottom:16,display:"flex",alignItems:"center",gap:12}}>
  <Spinner/><span style={{color:"#fbbf24",fontSize:14}}>{busyMsg}</span>
  </div>}
-
- {/* ── Sheet error ── */}
- {sheetError&&<div style={{background:"rgba(220,38,38,.07)",border:"1px solid rgba(220,38,38,.25)",borderRadius:10,padding:"12px 16px",marginBottom:16,color:"#fca5a5",fontSize:13}}> {sheetError}</div>}
 
  {/* ── Toast ── */}
  {toast&&<div style={{position:"fixed",bottom:24,right:24,zIndex:200,background:toast.type==="error"?"rgba(220,38,38,.95)":toast.type==="info"?"rgba(37,99,235,.95)":"rgba(5,150,105,.95)",borderRadius:10,padding:"12px 20px",boxShadow:"0 8px 32px rgba(0,0,0,.4)",fontSize:14,fontWeight:600,color:"white",animation:"slideIn .3s ease"}}>{toast.msg}</div>}
@@ -736,8 +722,9 @@ Return the new file ID as: FILE_ID=THE_ID`}],
  <div onClick={e=>e.stopPropagation()} style={{background:"#0f172a",border:"1px solid rgba(251,191,36,.3)",borderRadius:16,padding:28,maxWidth:420,width:"90%",boxShadow:"0 24px 60px rgba(0,0,0,.7)"}}>
  <div style={{fontSize:28,textAlign:"center",marginBottom:8}}></div>
  <div style={{fontSize:16,fontWeight:800,color:"#fbbf24",textAlign:"center",marginBottom:4}}>Modo Admin</div>
- <div style={{fontSize:12,color:"#475569",textAlign:"center",marginBottom:20}}>Cole sua Anthropic API key para desbloquear edição</div>
- <div style={{position:"relative",marginBottom:16}}>
+ <div style={{fontSize:12,color:"#475569",textAlign:"center",marginBottom:20}}>Cole suas chaves para desbloquear edição</div>
+ <div style={{fontSize:10,color:"#475569",marginBottom:6,textTransform:"uppercase",letterSpacing:1,fontWeight:600}}>Anthropic API Key</div>
+ <div style={{position:"relative",marginBottom:12}}>
  <input
  type={showApiKeyText?"text":"password"}
  value={apiKeyInput}
@@ -750,8 +737,16 @@ Return the new file ID as: FILE_ID=THE_ID`}],
  style={{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",background:"transparent",border:"none",color:"#475569",cursor:"pointer",fontSize:16,padding:4}}>
  {showApiKeyText?"🙈":"👁"}</button>
  </div>
+ <div style={{fontSize:10,color:"#475569",marginBottom:6,textTransform:"uppercase",letterSpacing:1,fontWeight:600}}>GitHub Token <span style={{color:"#334155",textTransform:"none",letterSpacing:0}}>(escopo: gist)</span></div>
+ <input
+ type="password"
+ value={githubTokenInput}
+ onChange={e=>setGithubTokenInput(e.target.value)}
+ onKeyDown={e=>e.key==="Enter"&&loginAdmin()}
+ placeholder="ghp_..."
+ style={{width:"100%",background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",borderRadius:9,padding:"10px 14px",color:"#e2e8f0",fontSize:13,outline:"none",boxSizing:"border-box",fontFamily:"monospace",marginBottom:16}}/>
  <div style={{fontSize:11,color:"#334155",marginBottom:20,lineHeight:1.6}}>
- A key fica salva apenas no seu browser (localStorage). Visitantes sem a key só visualizam a coleção.
+ Tudo salvo apenas no seu browser (localStorage). Visitantes sem as chaves só visualizam a coleção.
  </div>
  <div style={{display:"flex",gap:10}}>
  <button onClick={()=>setShowApiModal(false)} style={{flex:1,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.12)",borderRadius:9,padding:"11px",color:"#64748b",cursor:"pointer",fontSize:14,fontWeight:600}}>Cancelar</button>
@@ -767,8 +762,8 @@ Return the new file ID as: FILE_ID=THE_ID`}],
  <div style={{fontSize:32,textAlign:"center",marginBottom:12}}></div>
  <div style={{fontSize:16,fontWeight:800,color:"#ef4444",textAlign:"center",marginBottom:8}}>Resetar tudo?</div>
  <div style={{fontSize:13,color:"#94a3b8",textAlign:"center",lineHeight:1.7,marginBottom:24}}>
- Apaga todas as cartas e desvincula a planilha.<br/>
- <span style={{fontSize:12,color:"#475569"}}>O arquivo no Google Drive NÃO será apagado.</span>
+ Apaga todas as cartas e desvincula o Gist.<br/>
+ <span style={{fontSize:12,color:"#475569"}}>O Gist no GitHub NÃO será apagado.</span>
  </div>
  <div style={{display:"flex",gap:10}}>
  <button onClick={()=>setShowResetModal(false)} style={{flex:1,background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.12)",borderRadius:9,padding:"12px",color:"#64748b",cursor:"pointer",fontSize:14,fontWeight:600}}>Cancelar</button>
