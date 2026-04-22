@@ -42,9 +42,9 @@ const toBase64 = (f) => new Promise((res,rej) => { const r=new FileReader(); r.o
 const callClaude = async (body, apiKey) => {
  const res = await fetch("https://api.anthropic.com/v1/messages", {
  method:"POST", headers:{"Content-Type":"application/json","x-api-key":apiKey,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
- body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:2000,...body}),
+ body:JSON.stringify({model:"claude-opus-4-5",max_tokens:2000,...body}),
  });
- if(!res.ok) throw new Error(`API ${res.status}`);
+ if(!res.ok) { const err=await res.json().catch(()=>({error:{message:res.status}})); throw new Error(err?.error?.message||`API ${res.status}`); }
  return res.json();
 };
 
@@ -221,7 +221,7 @@ export default function App() {
  const batch=extractArray(text).map((c,i)=>({...c,quantity:1,condition:"NM",_tempId:Date.now()+i}));
  if(!batch.length) throw 0;
  setPendingBatch(batch); setRemovedIds(new Set()); setView("confirm");
- } catch { showToast("Não foi possível identificar. Tente com melhor iluminação.","error"); setView("collection"); }
+ } catch(err) { showToast(`Erro: ${err.message}`,"error"); setView("collection"); }
  finally { setBusy(false); if(fileRef.current) fileRef.current.value=""; }
  };
 
