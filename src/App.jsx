@@ -353,7 +353,10 @@ export default function App() {
  setCards([]); setGistId(GIST_ID);
  setFilterSet(""); setFilterRarity(""); setFilterLang(""); setFilterCond("");
  setView("collection"); setShowResetModal(false);
- await Promise.all([window.storage.delete("cards").catch(()=>{}),window.storage.delete("gistId").catch(()=>{})]);
+ await Promise.all([
+ window.storage.set("cards","[]").catch(()=>{}),
+ window.storage.delete("gistId").catch(()=>{}),
+ ]);
  showToast("Tudo resetado!","info");
  };
  const loadSeed = async () => {
